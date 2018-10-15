@@ -123,6 +123,7 @@ void Expo::handshakeActive(NetSocket * sock) {
     try {
         switch (message = sock->recv(), message.type) {
         case Message::Accept:
+            addNode(message.data, sock);
             break;
         case Message::Reject:
             throw Rejected(HERE);
@@ -134,7 +135,7 @@ void Expo::handshakeActive(NetSocket * sock) {
     }
 
     unique_lock<mutex> lck(cluster_mtx);
-    cluster[message.data] = sock;
+    sendCluster(sock);
     peers.push_back(sock);
     Logger(Info) << "Connected to " << sock->getHost() << ":" << sock->getPort() << " (" << message.data << ")";
 }
