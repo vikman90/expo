@@ -115,6 +115,10 @@ void NetSocket::connect() {
     Socket::connect((struct sockaddr *)&addr, sizeof(addr));
 }
 
+bool NetSocket::isLoopback() const {
+    return ntohl(addr.sin_addr.s_addr) == INADDR_LOOPBACK;
+}
+
 string NetSocket::getHost() const {
     return inet_ntoa(addr.sin_addr);
 }

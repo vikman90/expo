@@ -176,8 +176,12 @@ void Expo::loop() {
     // Connect clients
 
     for (unsigned i = 0; i < clients.size(); ++i) {
-        Logger(Debug) << "Connecting to " << clients[i]->getHost() << ":" << clients[i]->getPort();
-        startThread(runClientThread, clients[i]);
+        if (clients[i]->isLoopback() && clients[i]->getPort() == server.getPort()) {
+            Logger(Warn) << "Cannot connect to the server itself (" << clients[i]->getHost() << ":" << clients[i]->getPort() << "). Ignoring client.";
+        } else {
+            Logger(Debug) << "Connecting to " << clients[i]->getHost() << ":" << clients[i]->getPort();
+            startThread(runClientThread, clients[i]);
+        }
     }
 
     // Bind server
