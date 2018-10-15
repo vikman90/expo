@@ -191,14 +191,10 @@ void Expo::loop() {
         server.bind();
         server.listen();
 
-        {
-            string host = server.getHost();
-
-            if (host != "0.0.0.0") {
-                Logger(Info) << "Listening to " << host << ":" << server.getPort();
-            } else {
-                Logger(Info) << "Listening to port " << server.getPort();
-            }
+        if (!server.isAny()) {
+            Logger(Info) << "Listening to " << server.getHost() << ":" << server.getPort();
+        } else {
+            Logger(Info) << "Listening to port " << server.getPort();
         }
 
         while (true) {

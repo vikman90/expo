@@ -43,6 +43,7 @@ public:
     NetSocket * accept();
     void bind();
     void connect();
+    bool isAny() const;
     bool isLoopback() const;
 
     string getHost() const;
