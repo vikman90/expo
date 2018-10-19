@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -52,16 +53,21 @@ public:
     void setPort(unsigned short port);
 
 private:
-    NetSocket(int sock, struct sockaddr_in & addr);
+    NetSocket(int sock, const struct sockaddr_in & addr);
     struct sockaddr_in addr;
 };
 
 class LocalSocket : public Socket {
 public:
     LocalSocket(const char * path = UNIX_SOCK);
+    LocalSocket * accept();
+    void bind();
+    void connect();
+
+    string getPath() const;
 
 private:
-    LocalSocket(int sock, struct sockaddr_un & addr);
+    LocalSocket(int sock, const struct sockaddr_un & addr);
 
     struct sockaddr_un addr;
 };

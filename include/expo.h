@@ -23,6 +23,7 @@ using namespace std;
 #include "exception.h"
 #include "message.h"
 #include "socket.h"
+#include "socketpool.h"
 #include "phrase.h"
 
 enum ExpoMode { Client, Daemon };
@@ -34,30 +35,33 @@ public:
 
     void addClient(const char * host, int port = DEFAULT_PORT);
     void addNode(const string & name, Socket * sock);
-    void closePeer(Socket * sock);
     void bindHost(const char * host);
     void bindPort(int port);
     void handler(NetSocket * sock);
-    void handshakeActive(NetSocket * client);
-    void handshakePassive(NetSocket * client);
+    void handshake(NetSocket * client);
     void loop();
-    Message parse(Message & message, Socket * sock);
+    Message parse(Message & message, NetSocket * sock);
     void removeNode(const string & name, Socket * sock);
     void sendCluster(NetSocket * sock);
     void threadStopped();
     const string & getName() const;
     void setName(const char * name);
 
+    friend void runClientThread(Expo * expo, NetSocket * sock);
+    friend void runLocalThread(Expo * expo, LocalSocket * sock);
+    friend void runServerThread(Expo * expo, NetSocket * server);
+
 private:
 
+    void closePeer(Socket * sock);
     unsigned nextCounter();
-    void startThread(void (*routine)(Expo *, NetSocket *), NetSocket * sock);
-    void startServerThread(Socket * sock);
+    template <class T> void startThread(void (*routine)(Expo *, T *), T * sock);
     void waitThreads();
 
     string name;
     unsigned counter;
     NetSocket server;
+    LocalSocket communicator;
     int threadCount;
     mutex counter_mtx;
     mutex threadCount_mtx;
@@ -67,7 +71,5 @@ private:
     map<string, Socket *> cluster;
     mutex cluster_mtx;
 };
-
-// extern Expo expo;
 
 #endif

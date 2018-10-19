@@ -2,8 +2,9 @@
 
 #include <expo.h>
 
-static void runClientThread(Expo * expo, NetSocket * socket);
-static void runServerThread(Expo * expo, NetSocket * socket);
+void runClientThread(Expo * expo, NetSocket * sock);
+void runLocalThread(Expo * expo, LocalSocket * sock);
+void runServerThread(Expo * expo, NetSocket * server);
 
 Expo::Expo() : threadCount(0) {
     mt19937 random(chrono::system_clock::now().time_since_epoch().count());
@@ -61,31 +62,6 @@ void Expo::removeNode(const string & name, Socket * sock) {
     }
 }
 
-void Expo::closePeer(Socket * sock) {
-    list<Socket *>::iterator peers_it;
-    map<string, Socket *>::iterator cluster_it;
-    unique_lock<mutex> lck(cluster_mtx);
-
-    peers.remove(sock);
-
-    // For each node related to the closing peer, broadcast a remove message
-    for (cluster_it = cluster.begin(); cluster_it != cluster.end(); ) {
-        if (cluster_it->second == sock) {
-            Logger(Info) << "Node lost: " << cluster_it->first;
-
-            for (peers_it = peers.begin(); peers_it != peers.end(); ++peers_it) {
-                (*peers_it)->send(Message(Message::Remove, cluster_it->first));
-            }
-
-            cluster_it = cluster.erase(cluster_it);
-        } else {
-            ++cluster_it;
-        }
-    }
-
-    delete sock;
-}
-
 void Expo::bindHost(const char * host) {
     server.setHost(host);
 }
@@ -114,9 +90,11 @@ void Expo::handler(NetSocket * sock) {
             break;
         }
     }
+
+
 }
 
-void Expo::handshakeActive(NetSocket * sock) {
+void Expo::handshake(NetSocket * sock) {
     Message message(Message::Hello, name);
     sock->send(message);
 
@@ -140,37 +118,6 @@ void Expo::handshakeActive(NetSocket * sock) {
     Logger(Info) << "Connected to " << sock->getHost() << ":" << sock->getPort() << " (" << message.data << ")";
 }
 
-void Expo::handshakePassive(NetSocket * sock) {
-    Message message = sock->recv();
-
-    switch (message.type) {
-    case Message::Hello:
-        try {
-            if (message.data == this->name) {
-                throw Duplicate(HERE);
-            }
-
-            addNode(message.data, sock);
-            sock->send(Message(Message::Accept, name));
-        } catch (Duplicate) {
-            Logger(Warn) << "Rejecting node: " << message.data << ": name already in the cluster.";
-            sock->send(Message::Reject);
-            sleep(1);
-            throw Rejected(HERE);
-        }
-
-        break;
-
-    default:
-        Logger(Warn) << "Unknown message from " << sock->getHost() << ":" << sock->getPort();
-        throw Invalid(HERE);
-    }
-
-    unique_lock<mutex> lck(cluster_mtx);
-    sendCluster(sock);
-    peers.push_back(sock);
-}
-
 void Expo::loop() {
     Logger(Info) << "Running as node: " << name;
 
@@ -185,33 +132,37 @@ void Expo::loop() {
         }
     }
 
-    // Bind server
-
-    try {
-        server.bind();
-        server.listen();
-
-        if (!server.isAny()) {
-            Logger(Info) << "Listening to " << server.getHost() << ":" << server.getPort();
-        } else {
-            Logger(Info) << "Listening to port " << server.getPort();
-        }
-
-        while (true) {
-            NetSocket * peer = server.accept();
-            startThread(runServerThread, peer);
-        }
-    } catch (Exception & error) {
-        Logger(Warn) << "Cannot bind to " << server.getHost() << ":" << server.getPort() << ": " << error;
-    }
+    // Run server threads
+    startThread(runServerThread, &server);
+    startThread(runLocalThread, &communicator);
 
     waitThreads();
 }
 
-Message Expo::parse(Message & message, Socket * sock) {
+Message Expo::parse(Message & message, NetSocket * sock) {
     Message response(message.counter);
 
     switch (message.type) {
+    case Message::Hello:
+        try {
+            if (message.data == this->name) {
+                throw Duplicate(HERE);
+            }
+
+            addNode(message.data, sock);
+            sock->send(Message(Message::Accept, name));
+
+            unique_lock<mutex> lck(cluster_mtx);
+            sendCluster(sock);
+            peers.push_back(sock);
+        } catch (Duplicate) {
+            Logger(Warn) << "Rejecting node: " << message.data << ": name already in the cluster.";
+            sock->send(Message::Reject);
+            throw Rejected(HERE);
+        }
+
+        break;
+
     case Message::Add:
         addNode(message.data, sock);
         break;
@@ -221,7 +172,7 @@ Message Expo::parse(Message & message, Socket * sock) {
         break;
 
     default:
-        Logger(Debug) << "Unknown message: " << message.type;
+        Logger(Warn) << "Unknown message from " << sock->getHost() << ":" << sock->getPort();
         throw Invalid(HERE);
     }
 
@@ -252,12 +203,37 @@ void Expo::setName(const char * name) {
     this->name = name;
 }
 
+void Expo::closePeer(Socket * sock) {
+    list<Socket *>::iterator peers_it;
+    map<string, Socket *>::iterator cluster_it;
+    unique_lock<mutex> lck(cluster_mtx);
+
+    peers.remove(sock);
+
+    // For each node related to the closing peer, broadcast a remove message
+    for (cluster_it = cluster.begin(); cluster_it != cluster.end(); ) {
+        if (cluster_it->second == sock) {
+            Logger(Info) << "Node lost: " << cluster_it->first;
+
+            for (peers_it = peers.begin(); peers_it != peers.end(); ++peers_it) {
+                (*peers_it)->send(Message(Message::Remove, cluster_it->first));
+            }
+
+            cluster_it = cluster.erase(cluster_it);
+        } else {
+            ++cluster_it;
+        }
+    }
+
+    delete sock;
+}
+
 unsigned Expo::nextCounter() {
     unique_lock<mutex> lck(counter_mtx);
     return counter++;
 }
 
-void Expo::startThread(void (*routine)(Expo *, NetSocket *), NetSocket * sock) {
+template <class T> void Expo::startThread(void (*routine)(Expo *, T *), T * sock) {
     unique_lock<mutex> lck(threadCount_mtx);
     threadCount++;
     thread dispatcher(routine, this, sock);
@@ -277,7 +253,7 @@ void runClientThread(Expo * expo, NetSocket * sock) {
 
     try {
         sock->connect();
-        expo->handshakeActive(sock);
+        expo->handshake(sock);
         expo->handler(sock);
     } catch (Invalid) {
     } catch (Rejected) {
@@ -287,24 +263,115 @@ void runClientThread(Expo * expo, NetSocket * sock) {
     }
 
     Logger(Info) << "Node disconnected.";
-    expo->closePeer(sock);
-    Logger(Info) << "Stopping client thread...";
     expo->threadStopped();
 }
 
-void runServerThread(Expo * expo, NetSocket * sock) {
-    Logger(Debug) << "Server thread started.";
+void runLocalThread(Expo * expo, LocalSocket * comm) {
+    SocketPool pool;
+
+    Logger(Debug) << "Local thread started.";
+
+    // Bind communicator
 
     try {
-        expo->handshakePassive(sock);
-        expo->handler(sock);
-    } catch (Invalid) {
-    } catch (Rejected) {
-    } catch (Exception e) {
-        Logger(Error) << e;
+        comm->bind();
+        comm->listen();
+        Logger(Info) << "Creating communicator: " << comm->getPath();
+    } catch (Exception & error) {
+        Logger(Warn) << "Cannot create communicator: " << comm->getPath() << ": " << error;
+        expo->threadStopped();
+        return;
     }
 
-    Logger(Info) << "Node disconnected.";
-    expo->closePeer(sock);
+    pool.add(*comm);
+
+    while (true) {
+        vector<Socket *> ready = pool.wait();
+
+        for (int i = 0; i < ready.size(); ++i) {
+            LocalSocket * sock = (LocalSocket *)ready[i];
+
+            try {
+                if (sock == comm) {
+                    Message message = sock->recv();
+                    //message = expo->parse(message, sock);
+
+                    if (message.type != Message::None) {
+                        sock->send(message);
+                    }
+                } else {
+                    LocalSocket * peer = comm->accept();
+                    pool.add(*peer);
+                }
+            } catch (Closed & e) {
+                Logger(Info) << "Node disconnected.";
+                expo->closePeer(sock);
+            } catch (Invalid) {
+            } catch (Exception & e) {
+                Logger(Error) << e;
+            }
+        }
+    }
+
+    // Dead code
+    Logger(Debug) << "Local thread finished.";
+    expo->threadStopped();
+}
+
+void runServerThread(Expo * expo, NetSocket * server) {
+    SocketPool pool;
+
+    Logger(Debug) << "Server thread started.";
+
+    // Bind server
+
+    try {
+        server->bind();
+        server->listen();
+
+        if (!server->isAny()) {
+            Logger(Info) << "Listening to " << server->getHost() << ":" << server->getPort();
+        } else {
+            Logger(Info) << "Listening to port " << server->getPort();
+        }
+    } catch (Exception & error) {
+        Logger(Warn) << "Cannot bind to " << server->getHost() << ":" << server->getPort() << ": " << error;
+        expo->threadStopped();
+        return;
+    }
+
+    pool.add(*server);
+
+    while (true) {
+        vector<Socket *> ready = pool.wait();
+
+        for (int i = 0; i < ready.size(); ++i) {
+            NetSocket * sock = (NetSocket *)ready[i];
+
+            try {
+                if (sock == server) {
+                    NetSocket * peer = server->accept();
+                    pool.add(*peer);
+                } else {
+                    Message message = sock->recv();
+                    message = expo->parse(message, sock);
+
+                    if (message.type != Message::None) {
+                        sock->send(message);
+                    }
+                }
+            } catch (Closed & e) {
+                Logger(Info) << "Node disconnected.";
+                expo->closePeer(sock);
+            } catch (Invalid) {
+            } catch (Rejected) {
+            } catch (Exception & e) {
+                Logger(Error) << e;
+            }
+        }
+    }
+
+    // Dead code
+    Logger(Debug) << "Server thread finished.";
     expo->threadStopped();
 }

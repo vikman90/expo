@@ -4,7 +4,7 @@
 
 Socket::Socket(int domain) {
     if (sock = socket(domain, SOCK_STREAM, 0), sock < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
@@ -14,7 +14,7 @@ Socket::~Socket() {
 
 void Socket::listen(int backlog) {
     if (::listen(sock, backlog) < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
@@ -22,7 +22,7 @@ void Socket::send(const Message & message) {
     string payload = message.payload();
 
     if (::send(sock, payload.data(), payload.length(), 0) != payload.length()) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
@@ -42,7 +42,7 @@ Message Socket::recv() {
 void Socket::recv(void * buffer, size_t length) {
     switch (::recv(sock, buffer, length, MSG_WAITALL)) {
     case -1:
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     case 0:
         throw Closed(HERE);
     }
@@ -50,13 +50,13 @@ void Socket::recv(void * buffer, size_t length) {
 
 void Socket::setsockopt(int name, int value) {
     if (::setsockopt(sock, SOL_SOCKET, name, &value, sizeof(value)) < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
 void Socket::setsockopt(int name, const struct timeval & value) {
     if (::setsockopt(sock, SOL_SOCKET, name, &value, sizeof(value)) < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
@@ -68,7 +68,7 @@ int Socket::accept(struct sockaddr * addr, socklen_t addrlen) {
     int sock;
 
     if (sock = ::accept(this->sock, addr, &addrlen), sock < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 
     return sock;
@@ -76,13 +76,13 @@ int Socket::accept(struct sockaddr * addr, socklen_t addrlen) {
 
 void Socket::bind(const struct sockaddr * addr, socklen_t addrlen) {
     if (::bind(sock, addr, addrlen) < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
 void Socket::connect(const struct sockaddr * addr, socklen_t addrlen) {
     if (::connect(sock, addr, addrlen) < 0) {
-        throw ::Exception(HERE, errno);
+        throw Exception(HERE, errno);
     }
 }
 
@@ -136,11 +136,11 @@ void NetSocket::setHost(const char * host) {
         struct hostent * hostent;
 
         if (hostent = gethostbyname(host), !hostent) {
-            throw ::Exception(HERE, (int)h_errno, string("Cannot resolve host: ") + hstrerror(h_errno));
+            throw Exception(HERE, (int)h_errno, string("Cannot resolve host: ") + hstrerror(h_errno));
         }
 
         if (hostent->h_addrtype != AF_INET) {
-            throw ::Exception(HERE, string("Unsupported address type."));
+            throw Exception(HERE, string("Unsupported address type."));
         }
 
         addr.sin_addr = *(struct in_addr *)hostent->h_addr;
@@ -151,11 +151,47 @@ void NetSocket::setPort(unsigned short port) {
     addr.sin_port = htons(port);
 }
 
-NetSocket::NetSocket(int sock, struct sockaddr_in & addr) : addr(addr) {
+NetSocket::NetSocket(int sock, const struct sockaddr_in & addr) : addr(addr) {
     setDescriptor(sock);
 }
 
 LocalSocket::LocalSocket(const char * path) : Socket(AF_UNIX) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, path, sizeof(addr.sun_path));
+}
+
+void LocalSocket::bind() {
+    struct stat buf;
+
+    // Try to delete the file, only if it's a socket.
+    // TOCTOU hazard.
+
+    if (stat(addr.sun_path, &buf) == 0) {
+        if (S_ISSOCK(buf.st_mode)) {
+            if (unlink(addr.sun_path) < 0) {
+                throw Exception(HERE, errno);
+            }
+        } else {
+            throw Exception(HERE, "The communicator exists and it's not a socket.");
+        }
+    }
+
+    Socket::bind((struct sockaddr *)&addr, sizeof(addr));
+}
+
+LocalSocket * LocalSocket::accept() {
+    struct sockaddr_un addr;
+    return new LocalSocket(Socket::accept((struct sockaddr *)&addr, sizeof(addr)), addr);
+}
+
+void LocalSocket::connect() {
+    Socket::connect((struct sockaddr *)&addr, sizeof(addr));
+}
+
+string LocalSocket::getPath() const {
+    return addr.sun_path;
+}
+
+LocalSocket::LocalSocket(int sock, const struct sockaddr_un & addr) : addr(addr) {
+    setDescriptor(sock);
 }
