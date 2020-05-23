@@ -4,6 +4,7 @@
 package cluster
 
 import (
+	"crypto/sha256"
 	"log"
 	"net"
 )
@@ -35,4 +36,10 @@ func CheckPassword(password string) bool {
 // NodeName returns the name of the node
 func NodeName() string {
 	return cluster.nodeName
+}
+
+// PasswordHash gets the cluster password hash
+func PasswordHash(salt []byte) []byte {
+	hash := sha256.Sum256(append(salt, cluster.password...))
+	return hash[:]
 }
